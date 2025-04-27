@@ -11,50 +11,102 @@
 (require 'cl-lib)
 
 ;; ----------------------------------------
+;; Customization group
+;; ----------------------------------------
+
+(defgroup emacs-qle nil
+  "Major mode for Quick Log Entry files."
+  :prefix "emacs-qle-"
+  :group 'applications)
+
+;; ----------------------------------------
 ;; Helper functions
 ;; ----------------------------------------
 
 (defun emacs-qle--maybe-switch-to-qle-file ()
-  "Prompt to open a .qle file if the current buffer isn't visiting one.
-Returns t if we should continue loading the mode."
-  (if (and (buffer-file-name)
-           (string-suffix-p ".qle" (buffer-file-name) t))
-      t
+  "Ensure visiting a .qle file; if not, prompt for one."
+  (unless (and (buffer-file-name)
+               (string-suffix-p ".qle" (buffer-file-name) t))
     (let ((file (read-file-name "Open QLE file: " nil nil t nil
                                 (lambda (f) (string-suffix-p ".qle" f t)))))
-      (find-file file)
-      nil)))
+      (find-file file)))
+  t)
 
 (defun emacs-qle--setup-windows ()
   "Split the window and set up the contacts display."
-  (let ((right (get-buffer-create "*QLE Contacts*")))
-    ;; Left window is the current file buffer
+  (let ((right (get-buffer-create "*QLE Contacts*"))
+        (left (current-buffer)))
     (delete-other-windows)
     (split-window-right)
-    ;; Switch to right and show contacts
     (other-window 1)
     (switch-to-buffer right)
     (read-only-mode 1)
-    ;; Return to the left (original file buffer)
-    (other-window -1)))
+    (other-window -1)
+    (switch-to-buffer left)))
 
 (defun emacs-qle--update-contacts-buffer ()
-  "Refresh the contents of the contacts buffer from the current file, skipping empty lines."
+  "Refresh the contents of the contacts buffer from the current file, adding a table header and sorting by date/time."
   (let ((file buffer-file-name)
-        (contacts-buffer (get-buffer-create "*QLE Contacts*")))
+        (contacts-buffer (get-buffer-create "*QLE Contacts*"))
+        (date-regex "\\(\\d{8}\\)")         ; Matches the date (YYYYMMDD)
+        (time-regex "\\(\\d{4}\\)")         ; Matches the time (HHMM)
+        (band-regex "\\([0-9]+M\\)")        ; Matches the band (e.g., 20m)
+        (mode-regex "\\(CW\\|SSB\\|FT8\\)") ; Matches the mode
+        (rst-regex "\\(\\d{3}\\)")          ; Matches the RST (e.g., 599)
+        (callsign-regex "\\([A-Za-z0-9]+\\)") ; Matches callsign
+        (power-regex "\\(\\d+W\\|\\d+\\)")  ; Matches power (e.g., 100W or just 100)
+        )
     (when (and file (file-readable-p file))
       (with-temp-buffer
         (insert-file-contents file)
         (let ((lines (split-string (buffer-string) "\n"))
-              (filtered-lines '()))
+              (contact-lines '()))  ;; We’ll accumulate formatted lines here
+
+          ;; Process the contact lines, skipping empty lines
           (dolist (line lines)
             (unless (string-match-p "^\\s-*$" line)
-              (push line filtered-lines)))
-          (setq filtered-lines (nreverse filtered-lines))
+              (let* ((date (if (string-match date-regex line) (match-string 1 line) nil))
+                     (time (if (string-match time-regex line) (match-string 1 line) nil))
+                     (band (if (string-match band-regex line) (match-string 1 line) nil))
+                     (mode (if (string-match mode-regex line) (match-string 1 line) nil))
+                     (rst-sent (if (string-match rst-regex line) (match-string 1 line) nil))
+                     (rst-received (if (string-match rst-regex line) (match-string 1 line) nil))
+                     (callsign (if (string-match callsign-regex line) (match-string 1 line) nil))
+                     (power (if (string-match power-regex line) (match-string 1 line) nil)))
+
+                ;; Debug: Print values of captured groups
+                (message "Parsed values: date=%s, time=%s, band=%s, mode=%s, rst-sent=%s, rst-received=%s, callsign=%s, power=%s"
+                         date time band mode rst-sent rst-received callsign power)
+
+                ;; Add formatted contact line to the list
+                (setq contact-lines
+                      (append contact-lines
+                              (list (format "%-10s %-6s %-7s %-6s %-11s %-15s %-10s %-6s"
+                                            (or date "N/A")
+                                            (or time "N/A")
+                                            (or band "N/A")
+                                            (or mode "N/A")
+                                            (or rst-sent "N/A")
+                                            (or rst-received "N/A")
+                                            (or callsign "N/A")
+                                            (or power "N/A"))))))))
+
+          ;; Sort the contact lines by date and time
+          (setq contact-lines (sort contact-lines
+                                     (lambda (a b)
+                                       (or (string< (substring a 0 8) (substring b 0 8))
+                                           (and (string= (substring a 0 8) (substring b 0 8))
+                                                (string< (substring a 9 13) (substring b 9 13)))))))
+
+          ;; Insert the header and sorted contact data into the contacts buffer
           (with-current-buffer contacts-buffer
             (let ((inhibit-read-only t))
               (erase-buffer)
-              (insert (string-join filtered-lines "\n"))
+              ;; Insert the header first
+              (insert "Date       Time   Band    Mode    RST Sent    RST Received    Callsign    Power\n")
+              ;; Insert the sorted contact data
+              (dolist (line contact-lines)
+                (insert line "\n"))
               (goto-char (point-min))
               (read-only-mode 1))))))))
 
@@ -83,11 +135,11 @@ Returns t if we should continue loading the mode."
   "Insert the UTC date and time at the start of the line, then create a newline.
 Also save the file after insertion."
   (interactive)
-  (beginning-of-line)  ; Move to the start of the line
-  (insert (format-time-string "%Y%m%d %H%M " (current-time) t))  ; Insert date and time with space between
-  (end-of-line)        ; Move to the end of the line
-  (newline)            ; Insert a newline
-  (save-buffer))       ; Save the file
+  (beginning-of-line)
+  (insert (format-time-string "%Y%m%d %H%M " (current-time) t))
+  (end-of-line)
+  (newline)
+  (save-buffer))
 
 ;; ----------------------------------------
 ;; Minor mode: emacs-qle-live-mode
@@ -95,8 +147,7 @@ Also save the file after insertion."
 
 (defvar emacs-qle-live-mode-map
   (let ((map (make-sparse-keymap)))
-    ;; Define key bindings for live mode here if needed
-    (define-key map (kbd "RET") #'emacs-qle-live-mode-insert-date-time-and-newline)  ; Use the updated function
+    (define-key map (kbd "RET") #'emacs-qle-live-mode-insert-date-time-and-newline)
     map)
   "Keymap for `emacs-qle-live-mode`.")
 
@@ -125,8 +176,8 @@ Also save the file after insertion."
 (define-derived-mode emacs-qle-mode fundamental-mode "emacs-qle"
   "Major mode for editing QLE log files."
   (use-local-map emacs-qle-mode-map)
+  (setq font-lock-defaults '(emacs-qle-font-lock-keywords))
   (when (emacs-qle--maybe-switch-to-qle-file)
-    (switch-to-buffer (current-buffer))
     (emacs-qle--setup-windows)
     (emacs-qle--update-contacts-buffer)))
 
