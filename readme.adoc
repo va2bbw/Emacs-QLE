@@ -1,0 +1,3 @@
+= Emacs QLE
+
+An Emacs major mode for logging amateur radio contacts using Quick Log Entry format by Tom Cort VA2NW
